@@ -1,4 +1,4 @@
 # Table of contents
 
-* [Initial page](README.md)
+* [CHAPTER 1 Reliable, Scalable, and Maintainable Applications](README.md)
 
