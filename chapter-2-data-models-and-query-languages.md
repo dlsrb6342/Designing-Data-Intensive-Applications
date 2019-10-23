@@ -123,6 +123,79 @@ Document DB에서는 RethinkDB가 RDB와 비슷한 join을 지원하고 MongoDB 
 
 ## Query Languages for Data
 
+SQL과 같은 Declarative한 Query Language에서는 어떤 데이터를 원하는지 표현하기만 하면 된다. 어떻게 데이터를 찾아올지는 표현할 필요없다. 그건 Database System의 query optimizer가 어떻게 할 지 결정하고 결과를 만들어 준다. 
+
+Declrartive Query Language는 DB 엔진의 구현을 숨길 수 있어 Query 변경 없이 성능 향상을 위한 수정을 할 수 있고 Parallel execution도 쉽게 구현 할 수 있다.
+
+### MapReduce Querying
+
+MapReduce는 대량의 data를 한번에 여러 머신에서 가공할때 사용하는 programming model이다. 함수형 프로그래밍 언어에서 많이 볼 수 있는 `map, reduce` 함수를 기반으로 한다. MongoDB와 같은 NoSQL에서도 많은 document 사이에서 read-only query를 수행할때 사용되기도 한다. 
+
+MapReduce는 클러스터에서 distributed execution을 수행하기 위한 low-level 모델이다. SQL 또한 distributed execution 구현을 MapReduce로 할 수도 있지만 그렇지 않은 구현도 있다. MapReduce가 distributed query execution의 정답은 아니다.
+
+MapReduce는 map 함수, reduce 함수 2가지를 작성해야 하는데 이를 극복하기 위해 MongoDB 2.2에서 aggregation pipeline을 추가했다. 
+
+```text
+db.observations.aggregate([
+    { $match: { family: "Sharks" } },
+    { $group: {
+        _id: {
+            year: { $year: "$observationTimestamp" },
+            month: { $month: "$observationTimestamp" }
+        },
+        totalAnimals: { $sum: "$numAnimals" }
+    } }
+]);
+```
+
+## Graph-Like Data Models
+
+간단한 many-to-many 관계에서는 Relational Model로도 표현 가능하지만 점점 복잡해 질수록 점점 그래프 모양의 data를 갖게 된다. Graph는 vertices와 edges로 이루어져있고 거의 모든 데이터를 표현할 수 있다. 
+
+### Property Graphs
+
+vertex 는
+
+* unique id
+* outgoing edges
+* incoming edges
+* properties \(key-value pairs\)
+
+edge는
+
+* unique id
+* edge의 시작에 있는 vertex = tail vertex
+* edge의 끝에 있는 vertex = head vertex
+* tail vertex와 head vertex의 관계를 나타내는 label
+* properties \(key-value pairs\)
+
+Graph는 Vertex와 Edge 이 2개의 Relation table로 이루어져있다고 생각하면 된다.
+
+1. 서로 다른 vertex를 연결하는 edge에는 schema같은 제약사항이 없다. 어떤 vertex든 상관없이 아무 vertex와 다 연결 가능하다. 
+2. 어떤 vertex든, 그 vertex의 incoming과 outgoing을 알기 때문에 효율적으로 graph를 순회할 수 있다. 
+3. 다양한 label을 사용해서 하나의 그래프에 다양한 종류의 정보를 저장할 수 있다. 
+
+이러한 특징들이 Graph model에 유연성을 준다. 
+
+### Graph Queries in SQL
+
+위에서 graph data가 Relational DB로도 표현할 수 있다고 했는데 SQL에 또한 Graph DB에서 사용 가능하다. 
+
+하지만 Graph DB에서는 원하는 vertex를 찾을때까지 계속 순회해야 하기 때문에 join의 횟수를 알 수 없다. 또 Graph DB를 위한 Query Language를 사용하면 단 몇줄로 가능한 Query를 상당히 많은 줄로 작성해야 한다. 따라서 Application에 맞는 DB를 선택하는 것이 중요하다. 
+
+### Triple-Stores and SPARQL
+
+Triple-Stores model은 비슷한 아이디어를 조금 다르게 표현했을뿐, Property Graph와 거의 같다. 
+
+Triple-Stores에서는 Data를 3가지 파트\(`subject, predicate, object`\)로 저장한다. `subject`는 graph의 vertex와 같은 것이고 `object`는 `predicate`에 따라 vertex일때도 있고 property의 value일때도 있다. 
+
+1. Object가 string이나 숫자같은 타입일 경우에는 property의 value이다. ex\) `Lucy(subject), age(predicate), 33(object)`
+2. Object는 vertex가 될 수 있다. 이 경우에는 predicate가 edge가 되고 subject는 tail vertex, object는 head vertex가 된다. ex\) `Lucy(subject), marriedTo(predicate), alain(object)`
+
+
+
+  
+  
 
 
 
