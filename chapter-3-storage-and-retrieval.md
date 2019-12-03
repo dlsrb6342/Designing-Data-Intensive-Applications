@@ -103,5 +103,63 @@ ElasticSearch나 Solr에서 사용 중인 Lucene도 비슷한 방법을 사용�
 
 LSM-Tree는 약간의 미묘함들이 있긴 하지만 기본 아이디어는 간단하고 효율적이다. Dataset이 허용가능한 Memory보다 커졌을 때도 충분히 잘 동작하고, 이미 Data가 정렬되어 저장됐기 때문에 range query도 효율적으로 수행할 수 있다. 또 Disk Write 작업이 순차적으로 수행되어 write throughput이 상당히 좋다.
 
+### B-Trees
+
+log-structured index는 쓸만하지만 가장 흔한 index type은 아니다. 가장 많이 사용되는 indexing structure는 B-Tree 이다.
+
+SSTables 처럼, B-Tree도 key-value lookup과 range query를 위해 key-value pair를 key 값으로 정렬해둔다. 하지만 이 부분을 제외한 모든 것들이 SSTable과 다르다.
+
+log-structured index는 Database를 가변적인 size의 segments로 나눈다. 하지만 B-tree는 고정된 size의 **Blocks or Pages** 로 나눈다. 보통 4KB의 크기이며 한번에 한 page만 읽고 쓴다. 이러한 Design은 하드웨어와 조금 더 비슷한 면이 있다. \(Disk가 fixed-size blocks를 가지는 것처럼\)
+
+각각의 page들은 address\(location\)으로 식별된다. pointer 처럼, 한 page가 다른 page를 가리키고 있다. 이러한 page references 를 사용하면 page들은 tree 형태로 표현될 수 있다. 
+
+![](.gitbook/assets/image%20%286%29.png)
+
+page는 여러개의 key들과 child page로 향하는 reference들을 가지고 있다. 무언가 Database에서 찾고자 할때, B-tree의 root인 어떤 한 page에서 시작된다. page의 child들은 각각 연속된 key의 range를 담당한다. B-tree의 leaf node인 page에는 각각의 key들만 가지고 있다. 
+
+B-tree의 page가 가지는 reference의 수를 **branching factor** 라고 한다. 보통 몇 백개 정도 된다.
+
+* Update value 
+  * leaf page까지 찾아가서 value를 바꿔주고 disk에 써준다. 
+* Add new key
+  * 어느 범위에 속하는지 따라 내려가서 해당 page에 추가해준다.
+  * 만약 page가 꽉 찼다면, page를 2개로 나누고 parent page에 reference를 update해준다.
+
+대부분의 Database는 4 level의 B-Tree면 충분하기 때문에 page reference를 그렇게 많이 따라 내려가지는 않는다. \(4KB page, 500 branching factor, four-level B-Tree는 256TB를 저장할 수 있다.\)
+
+#### Making B-trees reliable
+
+B-Tree의 write 작업은 disk의 page에 있는 data를 overwrite 한다. 이 작업은 page의 reference를 변하지 않게 유지해준다. 이런 overwriting 작업은 실제 hardware operation이라고 생각할 수 있다. HDD에서는, spinning platter의 맞는 위치를 찾고 그곳에 새로운 data를 쓴다. SSD에서는 지우고 다시 쓰기 때문에 조금 더 복잡하다.
+
+게다가, 만약 해당하는 page가 꽉 찼다면 여러 page를 고쳐야 할 수도 있다. 이러한 작업은 write 작업 중간에 database crash가 발생할 수 있기 때문에 굉장히 위험한 작업이다. 
+
+Database가 crash에 회복할 수 있도록 만들기 위해, 보통 B-tree 구현체에 additional data structure를 포함시킨다. \(**WAL** : write-ahead log, redo log라고도 한다.\) WAL은 append-only file로 B-Tree의 모든 변경사항을 page에 적용하기 전에 작성되어지는 곳이다. Database가 crash 이후에 다시 실행되었을 때, 이 로그를 통해 다시 B-Tree를 consistent하게 만든다.
+
+여러 thread가 B-tree에 접근하고 서로 같은 page를 수정하려고 할 수 있기 때문에 concurrency control이 중요하다. 이는 보통 **latches\(lightweight locks\)** 로 해결한다. 
+
+### Comparing B-Trees and LSM-Trees
+
+LSM-Tree는 write 작업에서 조금 더 빠르고, B-Tree는 read 작업에서 더 빠르다. 하지만 이런 benchmark는 종종 결정적이지 않으며 워크로드의 세부 사항에 민감하다. 따라서 각자의 환경, workload로 system을 test 해야 한다. 이 섹션에서는 Storage Engine의 성능을 측정할 때, 고려해야할 몇가지 사항에 대해 다룰 것이다.
+
+#### Advantages of LSM-Trees
+
+B-Tree는 하나의 write 작업에서 적어도 2개의 write\(WAL에 쓰는 작업 + 실제 page에 쓰는 작업\)가 일어난다. 또한 작은 bytes의 변화에도 page의 전체를 다시 써야하는 overhead도 있다.
+
+하지만 LSM-Tree도 compaction 때문에 data를 여러번 rewrite 하게 된다. 이런 현상을 write amplification이라고 부른다. 제한된 횟수만큼만 overwrite할 수 있는 SSD에서 문제가 된다. write 작업이 많은 application에게는 write amplification이 중요한 사항이 될 수 있다. 
+
+LSM-Tree는 보통 B-Tree보다 write throughput 이 높게 나온다. 이것은 LSM-Tree가 낮은 write amplification을 가지기 때문이기도 하고 SSTable file들을 sequential하게 쓰기 때문이기도 하다. Sequentially Write는 magnetic hard drive일 때 특히 중요하게 작용한다.
+
+LSM-Tree는 더 compress되기 때문에 B-Tree보다 적은 수의 file을 가진다. 또한 B-Tree는 fragmentation이 발생할 수 있기 때문에 disk space를 낭비하기도 한다.
+
+#### Downsides of LSM-Trees
+
+LSM-Tree의 compaction process가 read / write performance에 방해가 될 수 있다. disk 자원은 한정되어있기 때문에, disk가 compaction process를 끝내기를 기다려야 할 수도 있다.
+
+Disk의 한정된 write throughput이 initial write\(logging and flushing memtable to disk\)와 compaction 사이에 공유되어야 한다. database가 커지면 커질수록 compaction에 필요한 disk bandwidth가 증가하게 된다. 
+
+LSM-Tree가 여러 다른 segment들 안에 같은 key의 다양한 복사본을 들고 있을 수 있는 반면에, B-Tree는 하나의 key는 딱 한 곳에만 저장되어 있다. 이는 transaction 관리에 큰 장점이 있다. 보통 key의 한 범위에 lock을 구현해서 관리하는데 B-Tree에서는 tree에 이 lock을 붙여주면 된다.
+
+
+
 
 
