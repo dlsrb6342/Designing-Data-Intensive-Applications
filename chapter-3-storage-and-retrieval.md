@@ -159,7 +159,45 @@ Disk의 한정된 write throughput이 initial write\(logging and flushing memtab
 
 LSM-Tree가 여러 다른 segment들 안에 같은 key의 다양한 복사본을 들고 있을 수 있는 반면에, B-Tree는 하나의 key는 딱 한 곳에만 저장되어 있다. 이는 transaction 관리에 큰 장점이 있다. 보통 key의 한 범위에 lock을 구현해서 관리하는데 B-Tree에서는 tree에 이 lock을 붙여주면 된다.
 
+### Other Indexing Structures
 
+Secondary Index는 굉장히 흔하게 사용된다. RDB에서는, CREATE INDEX command를 통해 join을 효율적으로 할 수 있도록 index를 생성할 수 있다. Secondary Index는 key-value index로 구성되는데 지금까지 봤던 index와 가장 다른 점은 서로 다른 row가 같은 key 값을 가질 수 있다는 점이다. 
 
+#### Storing values within the index
 
+index의 value는 실제 row 혹은 row가 저장된 곳의 참조값 이렇게 2가지 값이 될 수 있다. 참조값일 경우, heap file의 어딘가를 나타내고 특정한 순서없이 저장되어 있다. heap file의 위치를 저장하는 방법이 secondary index가 있을때 데이터의 중복을 피할 수 있기 때문에 실제 row를 저장하는 방법보다 더 common하게 사용된다. 
+
+key는 변하지 않고 값만 바꾸는 경우엔 heap file 위치 저장이 효율적이다. 새로운 값이 이전 값보다 작은 경우에는 그 값을 바로 덮어쓸 수 있다. 만약 새로운 값이 더 클 경우에는 약간 복잡해지는데 충분한 공간이 있는 heap으로 옮겨야 하기 때문에 모든 index를 새로운 heap을 가리키도록 업데이트해야 한다.
+
+종종, index에서 heap, row까지의 hop이 read 작업 성능에 영향을 줄 수 있다. 이럴 땐 clustered index라는 것을 사용한다. 예를 들어 MySQL의 InnoDB storage engine은 primary key의 table는 항상 clustered index이고 secondary index는 heap file의 위치를 보기 보다는 primary key를 참조한다. 
+
+clustered index\(index에 row data를 저장하는 것\)과 nonclustered index\(index에 data의 reference만 저장하는 것\)의 절충안을 `covering index` 혹은 `index with included columns` 라고 한다. 이것은 table의 특정 column만 index에 저장하고 index만으로도 특정 query에 답을 줄 수 있다. 
+
+#### Multi-column indexes
+
+지금까지 이야기한 key-value map 형태의 index는 테이블의 여러 column으로 query를 할때에는 부족한 점이 있다. 
+
+가장 흔한 type의 multi-column index은 concatenated index이다. Concatenated index란 여러 field를 하나의 key로 합쳐서 표현하는 index이다. 오래된 방식이고 만약 하나의 field로 query하고 싶을때는 사용할 수 없는 index이다.
+
+Multi-dimensional index가 여러 column을 한번에 조회하는 가장 일반적인 방법이다. 공간적 데이터를 다룰때 특히 중요하다. latitude의 범위와 longitude의 범위로 조회할 경우, Multi-dimensional index를 활용할 수 있다.
+
+#### Full-text search and fuzzy indexes
+
+지금까지의 index는 정확한 data와 정확한 key 값으로 조회할 경우만을 가정하고 생각했다. 하지만 불명확한\(fuzzy\) query를 할 때는 아주 다른 기술이 사용된다.
+
+Full-text search engine은 동의어도 포함해야 하고 문법적 다양성도 고려해야 하고 여러가지 언어적인 고려사항이 많다. Lucene은 이를 edit distance로 조회가 가능하게 해준다.
+
+#### Keeping everything in memory
+
+RAM이 점점 싸지면서 cost-per-gigabyte는 점점 고려대상에서 제외되고 있다. 많은 dataset들이 그렇게 크지 않기 때문에 여러 장비에 분산하여 data 전부를 memory에 저장할만 해졌다. 이로 인해 in-memory database들이 발전할 수 있었다.
+
+캐시로만 사용하기 위한 in-memory database도 있지만 batter-powered RAM과 같은 특수한 hardware를 사용하거나 disk에 log를 남기는 등 durability를 목적으로 하는 in-memory database도 있다. 
+
+VoltDB, MemSQL, and Oracle TimesTen와 같은 Relational Model의 in-memory database들도 있다. 이들은 on-disk data관리의 overhead가 없어 큰 성능 향상이 있다. durability를 신경쓴 key-value store인 RAMCloud도 있고 Redis나 Couchbase같이 durability가 약한 key-value store도 있다.
+
+in-memory database의 performance 이점은 disk에서 읽어올 필요가 없기 때문에 발생하는 것은 아니다.  disk-based engine이더라도, 큰 memory를 가지고 있다면 최근 사용된 disk block을 전부 memory에 저장하고 읽어올 수 있다. 그러나 in-memory database는 in-memory data structure를 disk에 write할 형태로 encoding하는 overhead가 없기 때문에 더 빠를 수 있는 것이다.
+
+Redis는 priority queue나 set같은 다양한 data structure를 제공하는데 이는 모든 데이터를 memory에 저장하기 때문에 가능한 이점이다. 이러한 data structure는 disk based index에는 구현하기 어렵기 때문에 in-memory database만 제공할 수 있는 것이다.
+
+최근 연구 결과, in-memory database는 사용 가능한 memory의 양보다 더 큰 dataset를 제공할 수 있다고 한다. Operating System이 virtual memory를 다루는 것과 file들을 swap하는 것처럼 가장 예전에 접근한 data는 memory에서 disk로 내리고 나중에 접근할 때에 disk에서 꺼내오는 방식으로 구현이 가능하다. 이러한 방식을 anti-caching 방식이라고 한다. 데이터베이스는 전체 메모리 페이지가 아닌 개별 레코드 단위로 작업 할 수 있으므로 OS보다 메모리를 보다 효율적으로 관리 할 수 있다. 
 
